@@ -61,7 +61,7 @@ Normalize_Dir = os.path.join(TriAnswer_PROG_ROOT, 'Normalize')
 TA_FileHandle = [None, None, None, None]
 CH_SpeedText = ['Fast_1KHz', 'Medium_500Hz', 'Slow_333Hz', 'Default_100Hz']
 Btn_Record_State = 0  # 0: Rec, 1:Stop
-save_file_dir=None
+save_file_dir=None #存下來的檔案名稱 2024_02_05_10_59_..
 '''
 FLOW_CTRL_STATE : 
 0 : init                -> unlock MQTT, make all reset, After select the device, turn Scan btn into Connect btn
@@ -484,8 +484,10 @@ class ipcamCapture:
                 counter=0
                 start_recording = time.time()
                 record=0
+                temp_time_step=list()
                 while (Btn_Record_State):
                     record=1
+                    temp_time_step.append(time.time())
                     self.status, self.Frame = self.capture.read()
                     if self.status==True:
                         #video record
@@ -508,7 +510,12 @@ class ipcamCapture:
                         cv2.imwrite(f'{imgpath}/{name}.png',self.Frame,[cv2.IMWRITE_PNG_COMPRESSION,0])
                 out_time=time.time()
                 if (record==1):
+                    file=open(f'{imgpath}/time_step.txt',"w")
+                    file.write(f'actually record time = {out_time-start_recording}\n')
+                    file.write(str(temp_time_step))
+                    file.close()
                     print('counter=', counter)
+                    print('time_step_len',len(temp_time_step))
                     print('start record video time=',start_recording)
                     print('stop record video time=',out_time)
                     print('actual record time',out_time-start_recording)
@@ -707,40 +714,62 @@ def resample(path:str, target_length):
             1, input_signal.shape[0], input_signal.shape[0]), input_signal)
     
 def normalize(file_dir):
+    normalize_dir=os.path.join(Normalize_Dir, os.path.basename(file_dir))
+    os.makedirs(normalize_dir)
+
     ppgr_path=f'{file_dir}/PPG_R.csv'
-    print(ppgr_path)
+    #print(ppgr_path)
     ppgir_path=f'{file_dir}/PPG_IR.csv'
     ecg_path=f'{file_dir}/ECG.csv'
     img_path=f'{file_dir}/img/*.png'
+    record_info=f'{file_dir}/img/time_step.txt'
     img=glob.glob(img_path)
-    print('img_length',len(img))
-    print('ideal ecg length',int(len(img)/30*1000))
-    print('ideal ppg length',int(len(img)/30*100))
+
+    #print('img_length',len(img))
+    #print('ideal ecg length',int(len(img)/30*1000))
+    #print('ideal ppg length',int(len(img)/30*100))
     
+    
+
     ecg_len,re_ecg=resample(ecg_path, int(len(img)/30*1000))
     ppgr_len,re_ppgr=resample(ppgr_path, int(len(img)/30*100))
     ppgir_len,re_ppgir=resample(ppgir_path, int(len(img)/30*100))
-    
-    print('re_ecg_length',re_ecg.shape)
-    print('re_ppgr_length',re_ppgr.shape)
-    print('re_ppgir_length',re_ppgir.shape)
-    normalize_dir=os.path.join(Normalize_Dir, os.path.basename(file_dir))
-    print('normalize_dir',normalize_dir)
-    os.makedirs(normalize_dir)
-    
-    FileName = f'normalize_information.txt'
-    information= open(os.path.join(normalize_dir, FileName), "w")
-    information.write(f'original ECG length    = {ecg_len} normalize length = {re_ecg.shape[0]}\n')
-    information.write(f'original PPG_R length  =  {ppgr_len} normalize length = {re_ppgr.shape[0]}\n')
-    information.write(f'original PPG_IR length =  {ppgir_len} normalize length = {re_ppgir.shape[0]}\n')
-    information.write(f'original image length  =  {len(img)} normalize length = {len(img)}\n')
-    information.close()
+
     df = pd.DataFrame(re_ppgr)
     df.to_csv(os.path.join(normalize_dir, 'PPG_R.csv'), index=False)
     df = pd.DataFrame(re_ppgir)
     df.to_csv(os.path.join(normalize_dir, 'PPG_IR.csv'), index=False)
     df = pd.DataFrame(re_ecg)
     df.to_csv(os.path.join(normalize_dir, 'ECG.csv'), index=False)
+    
+
+    with open(record_info, "r") as f:
+        str1 = f.read()
+        str1 = str1.split("\n")
+        record_time=str1[0]
+        time_step= open(os.path.join(normalize_dir, 'time_step.txt'), "w")
+        counter=1
+        for x in str1[1].split():
+            if(counter==1):
+                x=x[1:-1] #去[,
+            elif(counter==len(str1[1].split())):
+                x=x[:-1] #去]
+            else:
+                x=x[:-1] #去,
+            time_step.write(f'{x}\n')
+            counter+=1
+    FileName = f'normalize_information.txt'
+    information= open(os.path.join(normalize_dir, FileName), "w")
+    information.write(f'actually record time = {record_time}\n')
+    information.write(f'calculate record video time  =  {len(img)/30}\n')
+    information.write(f'calculate record ECG time  =  {ecg_len/1000}\n')
+    information.write(f'original ECG length    = {ecg_len} normalize length = {re_ecg.shape[0]}\n')
+    information.write(f'original PPG_R length  =  {ppgr_len} normalize length = {re_ppgr.shape[0]}\n')
+    information.write(f'original PPG_IR length =  {ppgir_len} normalize length = {re_ppgir.shape[0]}\n')
+    information.write(f'original image length  =  {len(img)} normalize length = {len(img)}\n')
+    
+    information.close()
+
     cmd=f'ffmpeg -r 30 -i {file_dir}/img/%05d.png -an -c:v rawvideo -pix_fmt bgr24 {normalize_dir}/output.avi'
     res=os.popen(cmd)
     print('Normalize complete')
