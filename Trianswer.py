@@ -23,6 +23,9 @@ import PIL
 from PIL import ImageTk
 from PIL import Image
 
+import glob
+import pandas as pd
+
 DATA_VAL_UUID = "0000a001-0000-1000-8000-00805f9b34fb"
 DEVICE_NAME_FILTER = "Tri"
 Device_SN_flag = True
@@ -49,14 +52,16 @@ camera = None
 video = None
 image_width = int(640)
 image_height = int(480)
-camera_num = int(1)
+camera_num = int(0)
+imgpath=None
 # File related
 TriAnswer_PROG_ROOT = os.path.abspath(os.getcwd())
 TriAnswer_Record_Dir = os.path.join(TriAnswer_PROG_ROOT, 'TriAnswer_Records')
+Normalize_Dir = os.path.join(TriAnswer_PROG_ROOT, 'Normalize')
 TA_FileHandle = [None, None, None, None]
 CH_SpeedText = ['Fast_1KHz', 'Medium_500Hz', 'Slow_333Hz', 'Default_100Hz']
 Btn_Record_State = 0  # 0: Rec, 1:Stop
-
+save_file_dir=None
 '''
 FLOW_CTRL_STATE : 
 0 : init                -> unlock MQTT, make all reset, After select the device, turn Scan btn into Connect btn
@@ -174,15 +179,20 @@ def detection_callback(device, advertisement_data):
 
 async def handle_rx_data(_: int, data: bytearray):
     global pkg_NO_pre, Device_SN_flag, SN_str, waveform_buffer_index, waveform_buffer, PPG_DC_GET_FLAG, PPG_DC
-
+    
+    #print('data len',len(data))
+    #print('data',data)
     # BLE Data to CH 1 & 2 ECG Values
     ECG_temp_arr = np.zeros(PPG_VALID_LEN_INDEX)
     for ind in range(0, PPG_VALID_LEN_INDEX):
         ECG_temp_arr[ind] = (data[ind] & 0xFF) * 3600 / (2 ** 8)  # Unit : mV
-
+    
+    
+    
     # BLE Data to PPG Values
     PPG_DATA_INDEX_BASE = PPG_VALID_LEN_INDEX + 1
     PPG_VALID_LEN = round((data[PPG_VALID_LEN_INDEX] & 0xFF) / 4)
+    #print('PPG_VALID_LEN',PPG_VALID_LEN)
     PPG_temp_arr = np.zeros((2, PPG_VALID_LEN))
     for ind in range(0, PPG_VALID_LEN):
         PPG_temp_arr[0][ind] = (data[PPG_DATA_INDEX_BASE + ind * 4] & 0xFF) + (
@@ -195,21 +205,29 @@ async def handle_rx_data(_: int, data: bytearray):
         PPG_temp_arr = [PPG_temp_arr[0][1:], PPG_temp_arr[1][1:]]
         PPG_DC_GET_FLAG = True
 
+     
+    #print('ECG_temp_arr shape=',ECG_temp_arr.shape)
+    #print('PPG_temp_arr shape=',PPG_temp_arr.shape)
+    
     # Waveform Processing (the right the newer)
     wave_temp_array = [[], [], [], []]
 
     for ch_ind in range(0, 4):
         # Prepare the drawing data per channel (先全部填入，繪圖前才做降頻)
+        
         if ch_ind < 2:  # CH1~2
             wave_temp_array[ch_ind] = ECG_temp_arr[ch_ind::2]
         else:  # CH3~4 : 10倍頻至1000Hz再降頻
             wave_temp_array[ch_ind] = np.repeat(
                 PPG_temp_arr[ch_ind - 2], CH_SpeedMode[ch_ind])-PPG_DC[ch_ind - 2]
-
+        
+        #print('wave_temp_array ' ,f'{ch_ind} shape=',wave_temp_array[ch_ind].shape)
         # Write to file
         if Btn_Record_State == 1:  # when record bottom trigger and the function change the state it will start write  txt file
             # start_recording_2 = time.time() ## test thread
-            # print("start_save_file",start_recording_2) 
+            # print("start_save_file",start_recording_2)
+            enter_time= time.time()
+            #print('ecg record time=',enter_time) 
             if ch_ind!=1:
                 for ele in wave_temp_array[ch_ind][::CH_SpeedMode[ch_ind]]:
                     TA_FileHandle[ch_ind].write(f'{ele}\n')
@@ -235,7 +253,9 @@ async def connect_to_device():
     global conn_connected, client, Target_device, MQTTClient, FLOW_CTRL_STATE, \
         waveform_buffer, waveform_buffer_index, PPG_DC_GET_FLAG
 
+    
     while FLAG_SENSING_EN:
+        
         if FLAG_ALLOW_CONN:
             try:
                 await client.connect()
@@ -252,10 +272,10 @@ async def connect_to_device():
                     log_update(
                         "> Connect to TriAnswer and try to initiate the measurement ...")
                     # waveform_draw_task()
-
+                    
                     await client.start_notify(DATA_VAL_UUID, handle_rx_data)
                     log_update('> Sensing ...')
-
+                    
                     while FLAG_SENSING_EN:
                         if not conn_connected:
                             print("> Not conn_connected")
@@ -271,7 +291,7 @@ async def connect_to_device():
     # After FLAG_SENSING_EN flag turns to False -> stop_notify and disconnect BLE device
     log_update(f'> [BLE] Try to disconnect...')
     await client.disconnect()
-    closeRecordFile()  # i think if disconnect and forget stop record will use it to close file
+    #closeRecordFile()  # i think if disconnect and forget stop record will use it to close file
 
     if not FLAG_WINDOW_CLOSE:
         conn_connected = False
@@ -364,6 +384,8 @@ def log_update(input_str):
 def waveform_draw_task():
     global conn_connected, client, Target_device, MQTTClient, FLOW_CTRL_STATE, \
         waveform_buffer, waveform_buffer_index, PPG_DC_GET_FLAG, FLAG_SENSING_EN
+    
+    
     while (FLAG_SENSING_EN):
         for ch_num in range(0, 2):
             mat_ax[ch_num].clear()
@@ -418,15 +440,16 @@ class ipcamCapture:
             self.capture = cv2.VideoCapture(0)
 
         # 關掉相機自動的功能
-        exp = self.capture.get(cv2.CAP_PROP_EXPOSURE)
-        wb = self.capture.get(cv2.CAP_PROP_WB_TEMPERATURE)
-        fc = self.capture.get(cv2.CAP_PROP_FOCUS)
+        #exp = self.capture.get(cv2.CAP_PROP_EXPOSURE)
+        #wb = self.capture.get(cv2.CAP_PROP_WB_TEMPERATURE)
+        #fc = self.capture.get(cv2.CAP_PROP_FOCUS)
         self.capture.set(cv2.CAP_PROP_AUTO_WB, 0)  # 關掉自動白平衡 0
         self.capture.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0)
         self.capture.set(cv2.CAP_PROP_AUTOFOCUS, 0)
-        self.capture.set(cv2.CAP_PROP_EXPOSURE, exp)
-        self.capture.set(cv2.CAP_PROP_WB_TEMPERATURE, wb)
-        self.capture.set(cv2.CAP_PROP_FOCUS, fc)
+        #self.capture.set(cv2.CAP_PROP_EXPOSURE, -4)
+        #self.capture.set(cv2.CAP_PROP_WB_TEMPERATURE, wb)
+        #self.capture.set(cv2.CAP_PROP_FOCUS, fc)
+        #self.capture.set(cv2.CAP_PROP_BRIGHTNESS,100)  #控制亮度
 
         if not self.capture.isOpened():
             print("Cannot open camera")
@@ -438,7 +461,7 @@ class ipcamCapture:
     def start(self):
         # 把程式放進子執行緒，daemon=True 表示該執行緒會隨著主執行緒關閉而關閉。
         print('ipcam started!')
-        threading.Thread(target=self.queryframe, daemon=True, args=()).start()
+        threading.Thread(target=self.queryframe, daemon=True, args=()).start() # daemon=True python 檔結束執行，強制結束
 
     def stop(self):
         # 記得要設計停止無限迴圈的開關。
@@ -451,18 +474,46 @@ class ipcamCapture:
         return self.Frame.copy()
 
     def queryframe(self):
-        global video
+        global video,imgpath
         while (not self.isstop):
             self.status, self.Frame = self.capture.read()
             if not self.status:
                 print("Can't receive frame (stream end?). Exiting ...")
             else:
                 # 記錄影片
+                counter=0
+                start_recording = time.time()
+                record=0
                 while (Btn_Record_State):
+                    record=1
                     self.status, self.Frame = self.capture.read()
-                    video.write(self.Frame)
-        self.capture.release()
-
+                    if self.status==True:
+                        #video record
+                        #video.write(self.Frame)
+                        #img record
+                        counter+=1
+                        if(counter<10):
+                            name=f'0000{counter}'
+                        elif(counter<100):
+                            name=f'000{counter}'
+                        elif(counter<1000):
+                            name=f'00{counter}'
+                        elif(counter<10000):
+                            name=f'0{counter}'
+                        elif(counter<100000):#10000-99999
+                            name=f'{counter}'
+                        else:
+                            print('recording stop,too long')
+                            break
+                        cv2.imwrite(f'{imgpath}/{name}.png',self.Frame,[cv2.IMWRITE_PNG_COMPRESSION,0])
+                out_time=time.time()
+                if (record==1):
+                    print('counter=', counter)
+                    print('start record video time=',start_recording)
+                    print('stop record video time=',out_time)
+                    print('actual record time',out_time-start_recording)
+                #record=0
+                    
 
 def turn_on_camera():
     print('enter function turn_on_camera')
@@ -505,7 +556,9 @@ def turn_on_camera():
             # window.update()  # update 照片
 
             start_recording = time.time()
+            record=0
             while (Btn_Record_State):
+                record=1
                 now_time = time.time()
                 frame = ipcam.getframe()
                 frame = cv2.resize(
@@ -542,6 +595,9 @@ def turn_on_camera():
                 movieLabel.config(image=imgtk)
                 movieLabel.image = imgtk
             out_time = time.time()
+            if (record==1):
+                print('actual record time of show',out_time-start_recording)
+            record=0
     # 釋放該攝影機裝置
     print('turn off camera')
     ipcam.stop()
@@ -559,12 +615,14 @@ def turn_on_camera():
 
 
 def createRecordFile():
-    global TA_FileHandle, video  # add global variable video
+    global TA_FileHandle, video,imgpath  # add global variable video
 
     dirIsExist = os.path.exists(TriAnswer_Record_Dir)
     if not dirIsExist:
         os.makedirs(TriAnswer_Record_Dir)
-
+    dirIsExist = os.path.exists(Normalize_Dir)
+    if not dirIsExist:
+        os.makedirs(Normalize_Dir)
     # Disable the setting frame
     """
     chk_CH1.configure(state='disable')
@@ -598,12 +656,16 @@ def createRecordFile():
                           1] = open(os.path.join(file_dir, FileName), "w")
 
     # add video file
-    video_name = file_dir + r'/video.avi'
-    fourcc = cv2.VideoWriter_fourcc(*'XVID')
-    video = cv2.VideoWriter(video_name, fourcc, 30, (640, 480))
-
-
-def closeRecordFile():
+    #video_name = file_dir + r'/video.avi'
+    #fourcc = cv2.VideoWriter_fourcc(*'I420') #I420 XVID
+    #video = cv2.VideoWriter(video_name, fourcc, 30, (640, 480))
+    #add img file
+    imgpath=os.path.join(file_dir, 'img')
+    dirIsExist = os.path.exists(imgpath)
+    if not dirIsExist:
+        os.makedirs(imgpath)
+    return file_dir
+def closeRecordFile(file_dir:str):
     global TA_FileHandle, Btn_Record_State
 
     if TA_FileHandle[0] is not None or TA_FileHandle[1] is not None or TA_FileHandle[2] is not None or TA_FileHandle[
@@ -613,11 +675,14 @@ def closeRecordFile():
                 TA_FileHandle[ch_num].close()
 
         TA_FileHandle = [None, None, None, None]
-
+    
+    
     # Enable the setting frame
     Btn_Record['text'] = 'Start\nREC'
     Btn_Record['bg'] = "#ef5350"
     Btn_Record_State = 0
+    
+    threading.Thread(target=normalize, daemon=False, args=(file_dir,)).start()
     """
     chk_CH1.configure(state='normal')
     chk_CH2.configure(state='normal')
@@ -627,8 +692,58 @@ def closeRecordFile():
             for childView in frm_Ch[ch_ind].winfo_children():
                 childView.configure(state='normal')
     """
-
-
+def resample(path:str, target_length):
+    """Samples a PPG sequence into specific length."""
+    signal=pd.read_csv(path)
+    signal=signal.values.reshape(1,-1)
+    signal=signal.tolist()
+    signal=signal[0]
+    for j in range(len(signal)):
+        signal[j]=int(signal[j])
+    input_signal=np.asarray(signal)
+    return len(signal),np.interp(
+        np.linspace(
+            1, input_signal.shape[0], target_length), np.linspace(
+            1, input_signal.shape[0], input_signal.shape[0]), input_signal)
+    
+def normalize(file_dir):
+    ppgr_path=f'{file_dir}/PPG_R.csv'
+    print(ppgr_path)
+    ppgir_path=f'{file_dir}/PPG_IR.csv'
+    ecg_path=f'{file_dir}/ECG.csv'
+    img_path=f'{file_dir}/img/*.png'
+    img=glob.glob(img_path)
+    print('img_length',len(img))
+    print('ideal ecg length',int(len(img)/30*1000))
+    print('ideal ppg length',int(len(img)/30*100))
+    
+    ecg_len,re_ecg=resample(ecg_path, int(len(img)/30*1000))
+    ppgr_len,re_ppgr=resample(ppgr_path, int(len(img)/30*100))
+    ppgir_len,re_ppgir=resample(ppgir_path, int(len(img)/30*100))
+    
+    print('re_ecg_length',re_ecg.shape)
+    print('re_ppgr_length',re_ppgr.shape)
+    print('re_ppgir_length',re_ppgir.shape)
+    normalize_dir=os.path.join(Normalize_Dir, os.path.basename(file_dir))
+    print('normalize_dir',normalize_dir)
+    os.makedirs(normalize_dir)
+    
+    FileName = f'normalize_information.txt'
+    information= open(os.path.join(normalize_dir, FileName), "w")
+    information.write(f'original ECG length    = {ecg_len} normalize length = {re_ecg.shape[0]}\n')
+    information.write(f'original PPG_R length  =  {ppgr_len} normalize length = {re_ppgr.shape[0]}\n')
+    information.write(f'original PPG_IR length =  {ppgir_len} normalize length = {re_ppgir.shape[0]}\n')
+    information.write(f'original image length  =  {len(img)} normalize length = {len(img)}\n')
+    information.close()
+    df = pd.DataFrame(re_ppgr)
+    df.to_csv(os.path.join(normalize_dir, 'PPG_R.csv'), index=False)
+    df = pd.DataFrame(re_ppgir)
+    df.to_csv(os.path.join(normalize_dir, 'PPG_IR.csv'), index=False)
+    df = pd.DataFrame(re_ecg)
+    df.to_csv(os.path.join(normalize_dir, 'ECG.csv'), index=False)
+    cmd=f'ffmpeg -r 30 -i {file_dir}/img/%05d.png -an -c:v rawvideo -pix_fmt bgr24 {normalize_dir}/output.avi'
+    res=os.popen(cmd)
+    print('Normalize complete')
 """
 def CH_SPEED_EN(ch_num):
     if CH_EN[ch_num].get():
@@ -641,16 +756,17 @@ def CH_SPEED_EN(ch_num):
 
 
 def Btn_Record_Ctrl():
-    global Btn_Record_State
+    global Btn_Record_State,save_file_dir
+    
     if Btn_Record_State == 0:
-        createRecordFile()  # just creat file
+        save_file_dir=createRecordFile()  # just creat file
         Btn_Record['text'] = 'STOP\nREC'
         Btn_Record['bg'] = "#96d1b1"
         start_recording = time.time()
         Btn_Record_State = 1  # set to one start write data fo file
         print("set_record_state=1 time=", start_recording)
     elif Btn_Record_State == 1:
-        closeRecordFile()
+        closeRecordFile(save_file_dir)
 
 
 if __name__ == "__main__":
