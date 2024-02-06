@@ -52,7 +52,7 @@ camera = None
 video = None
 image_width = int(640)
 image_height = int(480)
-camera_num = int(0)
+camera_num = int(1)
 imgpath=None
 # File related
 TriAnswer_PROG_ROOT = os.path.abspath(os.getcwd())
