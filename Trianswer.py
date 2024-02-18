@@ -441,14 +441,14 @@ class ipcamCapture:
 
         # 關掉相機自動的功能
         #exp = self.capture.get(cv2.CAP_PROP_EXPOSURE)
-        #wb = self.capture.get(cv2.CAP_PROP_WB_TEMPERATURE)
-        #fc = self.capture.get(cv2.CAP_PROP_FOCUS)
+        wb = self.capture.get(cv2.CAP_PROP_WB_TEMPERATURE)
+        fc = self.capture.get(cv2.CAP_PROP_FOCUS)
         self.capture.set(cv2.CAP_PROP_AUTO_WB, 0)  # 關掉自動白平衡 0
         self.capture.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0)
         self.capture.set(cv2.CAP_PROP_AUTOFOCUS, 0)
-        #self.capture.set(cv2.CAP_PROP_EXPOSURE, -4)
-        #self.capture.set(cv2.CAP_PROP_WB_TEMPERATURE, wb)
-        #self.capture.set(cv2.CAP_PROP_FOCUS, fc)
+        self.capture.set(cv2.CAP_PROP_EXPOSURE, -4)
+        self.capture.set(cv2.CAP_PROP_WB_TEMPERATURE, wb)
+        self.capture.set(cv2.CAP_PROP_FOCUS, fc)
         #self.capture.set(cv2.CAP_PROP_BRIGHTNESS,100)  #控制亮度
 
         if not self.capture.isOpened():
