@@ -53,6 +53,8 @@ video = None
 image_width = int(640)
 image_height = int(480)
 camera_num = int(1)
+exposure=int(-3)
+gain=int(64)
 imgpath=None
 # File related
 TriAnswer_PROG_ROOT = os.path.abspath(os.getcwd())
@@ -62,6 +64,7 @@ TA_FileHandle = [None, None, None, None]
 CH_SpeedText = ['Fast_1KHz', 'Medium_500Hz', 'Slow_333Hz', 'Default_100Hz']
 Btn_Record_State = 0  # 0: Rec, 1:Stop
 save_file_dir=None #存下來的檔案名稱 2024_02_05_10_59_..
+save_time_complete=False
 '''
 FLOW_CTRL_STATE : 
 0 : init                -> unlock MQTT, make all reset, After select the device, turn Scan btn into Connect btn
@@ -438,17 +441,21 @@ class ipcamCapture:
         if not self.capture.isOpened():
             print('just have one camera')
             self.capture = cv2.VideoCapture(0)
-
+        
+        #先讀一張，改值才有效
+        self.status, self.Frame = self.capture.read()
         # 關掉相機自動的功能
         #exp = self.capture.get(cv2.CAP_PROP_EXPOSURE)
-        wb = self.capture.get(cv2.CAP_PROP_WB_TEMPERATURE)
-        fc = self.capture.get(cv2.CAP_PROP_FOCUS)
-        self.capture.set(cv2.CAP_PROP_AUTO_WB, 0)  # 關掉自動白平衡 0
+        #wb = self.capture.get(cv2.CAP_PROP_WB_TEMPERATURE)
+        #fc = self.capture.get(cv2.CAP_PROP_FOCUS)
+        #self.capture.set(cv2.CAP_PROP_AUTO_WB, 0)  # 關掉自動白平衡 0
         self.capture.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0)
-        self.capture.set(cv2.CAP_PROP_AUTOFOCUS, 0)
-        self.capture.set(cv2.CAP_PROP_EXPOSURE, -4)
-        self.capture.set(cv2.CAP_PROP_WB_TEMPERATURE, wb)
-        self.capture.set(cv2.CAP_PROP_FOCUS, fc)
+        #self.capture.set(cv2.CAP_PROP_AUTOFOCUS, 0)
+        print(self.capture.set(cv2.CAP_PROP_EXPOSURE, exposure))
+        print(self.capture.set(cv2.CAP_PROP_GAIN, gain))
+        #self.capture.set(cv2.CAP_PROP_EXPOSURE, -4)
+        #self.capture.set(cv2.CAP_PROP_WB_TEMPERATURE, wb)
+        #self.capture.set(cv2.CAP_PROP_FOCUS, fc)
         #self.capture.set(cv2.CAP_PROP_BRIGHTNESS,100)  #控制亮度
 
         if not self.capture.isOpened():
@@ -474,7 +481,7 @@ class ipcamCapture:
         return self.Frame.copy()
 
     def queryframe(self):
-        global video,imgpath
+        global video,imgpath,save_time_complete
         while (not self.isstop):
             self.status, self.Frame = self.capture.read()
             if not self.status:
@@ -515,10 +522,10 @@ class ipcamCapture:
                     file.write(str(temp_time_step))
                     file.close()
                     print('counter=', counter)
-                    print('time_step_len',len(temp_time_step))
                     print('start record video time=',start_recording)
                     print('stop record video time=',out_time)
                     print('actual record time',out_time-start_recording)
+                    save_time_complete=True
                 #record=0
                     
 
@@ -674,7 +681,8 @@ def createRecordFile():
     return file_dir
 def closeRecordFile(file_dir:str):
     global TA_FileHandle, Btn_Record_State
-
+    
+    Btn_Record_State = 0
     if TA_FileHandle[0] is not None or TA_FileHandle[1] is not None or TA_FileHandle[2] is not None or TA_FileHandle[
             3] is not None:
         for ch_num in range(0, 4):
@@ -687,7 +695,6 @@ def closeRecordFile(file_dir:str):
     # Enable the setting frame
     Btn_Record['text'] = 'Start\nREC'
     Btn_Record['bg'] = "#ef5350"
-    Btn_Record_State = 0
     
     threading.Thread(target=normalize, daemon=False, args=(file_dir,)).start()
     """
@@ -712,8 +719,37 @@ def resample(path:str, target_length):
         np.linspace(
             1, input_signal.shape[0], target_length), np.linspace(
             1, input_signal.shape[0], input_signal.shape[0]), input_signal)
-    
+
+def clip_normalize(signal,fps,time,start):
+    print('ori signal=',signal.shape)
+    for i in range(len(time)):
+        if i==0:
+            begin=0
+            end=int((1-(start-int(start)))*fps)
+        elif i==len(time)-1:
+            begin=end
+            end=(signal.shape[0])
+        else:
+            begin=end
+            end=begin+fps
+        input_signal=signal[begin:end]
+        target_length=int(time[i]*fps/30)
+        print('begin=',begin,'end=',end,'target_length=',target_length,'input_signal=',input_signal.shape)
+        n_signal=np.interp(
+        np.linspace(
+            1, input_signal.shape[0], target_length), np.linspace(
+            1, input_signal.shape[0], input_signal.shape[0]), input_signal)
+        #print(n_signal[0:5],n_signal[n_signal.shape[0]-5:n_signal.shape[0]])
+        if i==0:
+            normalize_signal=n_signal
+        else:
+            normalize_signal=np.concatenate((normalize_signal,n_signal))
+    return normalize_signal
+
 def normalize(file_dir):
+    global save_time_complete
+    while(not save_time_complete):
+        print('wait save time and to normalize')
     normalize_dir=os.path.join(Normalize_Dir, os.path.basename(file_dir))
     os.makedirs(normalize_dir)
 
@@ -729,11 +765,56 @@ def normalize(file_dir):
     #print('ideal ecg length',int(len(img)/30*1000))
     #print('ideal ppg length',int(len(img)/30*100))
     
+    #get time info
+    time=list()
+    last=None
+    start=None
+    stop=None
+    with open(record_info, "r") as f:
+        str1 = f.read()
+        str1 = str1.split("\n")
+        record_time=str1[0]
+        time_step= open(os.path.join(normalize_dir, 'time_step.txt'), "w")
+        counter=1
+        time_counter=0
+        for x in str1[1].split():
+            if(counter==1):
+                x=x[1:-1] #去[,
+                temp_x=x
+                start=float(temp_x)
+                last=int(float(temp_x))
+                time_counter=0
+            elif(counter==len(str1[1].split())):
+                x=x[:-1] #去]
+                temp_x=x
+                stop=float(temp_x)
+            else:
+                x=x[:-1] #去,
+                
+            #print('int=',last,'x=',x)
+            time_step.write(f'{x}\n')
+            
+            if(last==int(float(x))):
+                time_counter+=1
+                if(counter==len(str1[1].split())): #最後一筆資料
+                    time.append(time_counter)
+            else:
+                time.append(time_counter)
+                time_counter=1
+                last=int(float(x))
+            counter+=1
     
+    duration=stop-start
+    
+    #resample to time sequence
+    ecg_len,re_ecg=resample(ecg_path, int(duration*1000))
+    ppgr_len,re_ppgr=resample(ppgr_path, int(duration*100))
+    ppgir_len,re_ppgir=resample(ppgir_path, int(duration*100))
 
-    ecg_len,re_ecg=resample(ecg_path, int(len(img)/30*1000))
-    ppgr_len,re_ppgr=resample(ppgr_path, int(len(img)/30*100))
-    ppgir_len,re_ppgir=resample(ppgir_path, int(len(img)/30*100))
+    # normalize
+    re_ecg=clip_normalize(re_ecg,1000,time,start)
+    re_ppgr=clip_normalize(re_ppgr,100,time,start)
+    re_ppgir=clip_normalize(re_ppgir,100,time,start)
 
     df = pd.DataFrame(re_ppgr)
     df.to_csv(os.path.join(normalize_dir, 'PPG_R.csv'), index=False)
@@ -743,23 +824,9 @@ def normalize(file_dir):
     df.to_csv(os.path.join(normalize_dir, 'ECG.csv'), index=False)
     
 
-    with open(record_info, "r") as f:
-        str1 = f.read()
-        str1 = str1.split("\n")
-        record_time=str1[0]
-        time_step= open(os.path.join(normalize_dir, 'time_step.txt'), "w")
-        counter=1
-        for x in str1[1].split():
-            if(counter==1):
-                x=x[1:-1] #去[,
-            elif(counter==len(str1[1].split())):
-                x=x[:-1] #去]
-            else:
-                x=x[:-1] #去,
-            time_step.write(f'{x}\n')
-            counter+=1
     FileName = f'normalize_information.txt'
     information= open(os.path.join(normalize_dir, FileName), "w")
+    information.write(f'ori name ={os.path.basename(file_dir)}\n')
     information.write(f'actually record time = {record_time}\n')
     information.write(f'calculate record video time  =  {len(img)/30}\n')
     information.write(f'calculate record ECG time  =  {ecg_len/1000}\n')
@@ -785,7 +852,7 @@ def CH_SPEED_EN(ch_num):
 
 
 def Btn_Record_Ctrl():
-    global Btn_Record_State,save_file_dir
+    global Btn_Record_State,save_file_dir,save_time_complete
     
     if Btn_Record_State == 0:
         save_file_dir=createRecordFile()  # just creat file
@@ -793,6 +860,7 @@ def Btn_Record_Ctrl():
         Btn_Record['bg'] = "#96d1b1"
         start_recording = time.time()
         Btn_Record_State = 1  # set to one start write data fo file
+        save_time_complete=False
         print("set_record_state=1 time=", start_recording)
     elif Btn_Record_State == 1:
         closeRecordFile(save_file_dir)
