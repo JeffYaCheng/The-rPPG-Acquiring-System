@@ -52,7 +52,7 @@ camera = None
 video = None
 image_width = int(640)
 image_height = int(480)
-camera_num = int(1)
+camera_num = int(0)
 exposure=int(-3)
 gain=int(64)
 imgpath=None
@@ -65,6 +65,7 @@ CH_SpeedText = ['Fast_1KHz', 'Medium_500Hz', 'Slow_333Hz', 'Default_100Hz']
 Btn_Record_State = 0  # 0: Rec, 1:Stop
 save_file_dir=None #存下來的檔案名稱 2024_02_05_10_59_..
 save_time_complete=False
+ipcam=None
 '''
 FLOW_CTRL_STATE : 
 0 : init                -> unlock MQTT, make all reset, After select the device, turn Scan btn into Connect btn
@@ -186,6 +187,7 @@ async def handle_rx_data(_: int, data: bytearray):
     #print('data len',len(data))
     #print('data',data)
     # BLE Data to CH 1 & 2 ECG Values
+    record_time= time.time()
     ECG_temp_arr = np.zeros(PPG_VALID_LEN_INDEX)
     for ind in range(0, PPG_VALID_LEN_INDEX):
         ECG_temp_arr[ind] = (data[ind] & 0xFF) * 3600 / (2 ** 8)  # Unit : mV
@@ -214,7 +216,7 @@ async def handle_rx_data(_: int, data: bytearray):
     
     # Waveform Processing (the right the newer)
     wave_temp_array = [[], [], [], []]
-
+    length=[]
     for ch_ind in range(0, 4):
         # Prepare the drawing data per channel (先全部填入，繪圖前才做降頻)
         
@@ -229,12 +231,51 @@ async def handle_rx_data(_: int, data: bytearray):
         if Btn_Record_State == 1:  # when record bottom trigger and the function change the state it will start write  txt file
             # start_recording_2 = time.time() ## test thread
             # print("start_save_file",start_recording_2)
-            enter_time= time.time()
+            
             #print('ecg record time=',enter_time) 
-            if ch_ind!=1:
+            if ch_ind==0: #ecg
+                length.append(len(wave_temp_array[ch_ind][::CH_SpeedMode[ch_ind]]))
                 for ele in wave_temp_array[ch_ind][::CH_SpeedMode[ch_ind]]:
                     TA_FileHandle[ch_ind].write(f'{ele}\n')
-
+            if ch_ind==2: #ppgir
+                counter=0
+                length.append(len(wave_temp_array[ch_ind][::CH_SpeedMode[ch_ind]]))
+                for ele in wave_temp_array[ch_ind][::CH_SpeedMode[ch_ind]]:
+                    TA_FileHandle[ch_ind].write(f'{ele}\n')
+                    counter+=1
+                    '''
+                    # deal ppg high peak
+                    if(abs(ele)>7000):
+                        print('time',record_time)
+                        print('ir spick=',ele)
+                        TA_FileHandle[ch_ind].write(f'{ele}\n')
+                        counter+=1
+                        #TA_FileHandle[ch_ind].write(f'{ele}\n')
+                        continue
+                    else:
+                        TA_FileHandle[ch_ind].write(f'{ele}\n')
+                        counter+=1
+                    '''
+                #length.append(counter)
+            if ch_ind==3: #ppgr
+                counter=0
+                length.append(len(wave_temp_array[ch_ind][::CH_SpeedMode[ch_ind]]))
+                for ele in wave_temp_array[ch_ind][::CH_SpeedMode[ch_ind]]:
+                    TA_FileHandle[ch_ind].write(f'{ele}\n')
+                    counter+=1
+                    # deal ppg high peak
+                    '''
+                    if(abs(ele)>7000):
+                        print('r spick=',ele)
+                        TA_FileHandle[ch_ind].write(f'{ele}\n')
+                        counter+=1
+                        continue
+                    else:
+                        TA_FileHandle[ch_ind].write(f'{ele}\n')
+                        counter+=1
+                    '''
+                #length.append(counter)
+                
         if (waveform_buffer_index[ch_ind] + len(wave_temp_array[ch_ind])) <= len(
                 waveform_buffer[ch_ind]):  # buffer not full
             waveform_buffer[ch_ind][
@@ -246,7 +287,9 @@ async def handle_rx_data(_: int, data: bytearray):
             waveform_buffer[ch_ind][:-len(wave_temp_array[ch_ind])] = waveform_buffer[ch_ind][
                 len(wave_temp_array[ch_ind]):]
             waveform_buffer[ch_ind][-len(wave_temp_array[ch_ind]):] = wave_temp_array[ch_ind]
-
+    # record time step
+    if Btn_Record_State == 1:
+        TA_FileHandle[1].write(f'{record_time},{length[0]},{length[1]},{length[2]}\n')
 
 def _connect_to_device_thread(async_loop):
     async_loop.run_until_complete(connect_to_device())
@@ -431,7 +474,7 @@ def waveform_draw_task():
 
 class ipcamCapture:
     def __init__(self):
-        global camera_num
+        global camera_num,gain,exposure
         self.Frame = []
         self.status = False
         self.isstop = False
@@ -451,20 +494,47 @@ class ipcamCapture:
         #self.capture.set(cv2.CAP_PROP_AUTO_WB, 0)  # 關掉自動白平衡 0
         self.capture.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0)
         #self.capture.set(cv2.CAP_PROP_AUTOFOCUS, 0)
-        print(self.capture.set(cv2.CAP_PROP_EXPOSURE, exposure))
-        print(self.capture.set(cv2.CAP_PROP_GAIN, gain))
+        exp_success=self.capture.set(cv2.CAP_PROP_EXPOSURE, exposure)
+        gain_success=self.capture.set(cv2.CAP_PROP_GAIN, gain)
         #self.capture.set(cv2.CAP_PROP_EXPOSURE, -4)
         #self.capture.set(cv2.CAP_PROP_WB_TEMPERATURE, wb)
         #self.capture.set(cv2.CAP_PROP_FOCUS, fc)
         #self.capture.set(cv2.CAP_PROP_BRIGHTNESS,100)  #控制亮度
-
+        '''
+        exposure_entry.insert(0, str(int(exposure)))
+        gain_entry.insert(0, str(int(gain)))
+        if not exp_success:
+            p_exp=False
+        else:
+            p_exp=exposure
+        if not gain_success:
+            p_gain=False
+        else:
+             p_gain=gain
+        exposure_value_label.config(text="曝光值: {}".format(p_exp))
+        gain_value_label.config(text="增益值: {}".format(p_gain))
+        '''
         if not self.capture.isOpened():
             print("Cannot open camera")
             exit()
         else:
             print("turn on camera")
             self.connect = True
-
+     # use to set exp       
+    def set_parameter(self):
+        #global exposure_entry,gain_entry,exposure_value_label,gain_value_label
+        
+        exp=int(exposure_entry.get())
+        gain=int(gain_entry.get())
+        exp_success=self.capture.set(cv2.CAP_PROP_EXPOSURE, exp)
+        gain_success=self.capture.set(cv2.CAP_PROP_GAIN, gain)
+        if not exp_success:
+            exp=False
+        if not gain_success:
+            gain=False
+        exposure_value_label.config(text="曝光值: {}".format(exp))
+        gain_value_label.config(text="增益值: {}".format(gain))
+    
     def start(self):
         # 把程式放進子執行緒，daemon=True 表示該執行緒會隨著主執行緒關閉而關閉。
         print('ipcam started!')
@@ -527,11 +597,14 @@ class ipcamCapture:
                     print('actual record time',out_time-start_recording)
                     save_time_complete=True
                 #record=0
-                    
-
+#use to set camera parameter
+def apply_settings():
+    global ipcam
+    if ipcam !=None:
+        ipcam.set_parameter()
 def turn_on_camera():
     print('enter function turn_on_camera')
-    global camera, video, FLAG_SENSING_EN, Btn_Record_State
+    global camera, video, FLAG_SENSING_EN, Btn_Record_State,ipcam
     ipcam = ipcamCapture()
     ipcam.start()
     # 讓相機初始設定
@@ -649,7 +722,7 @@ def createRecordFile():
 
     now_time = datetime.now()
     time_str = now_time.strftime('%Y_%m_%d_%H_%M_%S')
-    file_dir = r = f'{TriAnswer_Record_Dir}/' + time_str
+    file_dir = f'{TriAnswer_Record_Dir}/' + time_str
     if not os.path.exists(file_dir):
         os.makedirs(file_dir)
     for ch_num in range(0, 3):
@@ -657,9 +730,9 @@ def createRecordFile():
             FileName = f'ECG.csv'
             TA_FileHandle[ch_num] = open(os.path.join(file_dir, FileName), "w")
         elif ch_num == 1:  # CH2
-            FileName = f'CH{ch_num + 1}.csv'
-            #不存ch2
-            #TA_FileHandle[ch_num] = open(os.path.join(file_dir, FileName), "w")
+            FileName = f'ECG_PPG_time_step.txt'
+            #不存ch2 改存時間
+            TA_FileHandle[ch_num] = open(os.path.join(file_dir, FileName), "w")
         else:
             # CH3
             FileName = f'PPG_IR.csv'
@@ -706,7 +779,7 @@ def closeRecordFile(file_dir:str):
             for childView in frm_Ch[ch_ind].winfo_children():
                 childView.configure(state='normal')
     """
-def resample(path:str, target_length):
+def read_wave(path:str):
     """Samples a PPG sequence into specific length."""
     signal=pd.read_csv(path)
     signal=signal.values.reshape(1,-1)
@@ -715,37 +788,56 @@ def resample(path:str, target_length):
     for j in range(len(signal)):
         signal[j]=int(signal[j])
     input_signal=np.asarray(signal)
-    return len(signal),np.interp(
-        np.linspace(
-            1, input_signal.shape[0], target_length), np.linspace(
-            1, input_signal.shape[0], input_signal.shape[0]), input_signal)
+    return len(signal),input_signal
 
-def clip_normalize(signal,fps,time,start):
+def clip_normalize(signal,fps,signal_time,signal_range,img_counter,img_time):
     print('ori signal=',signal.shape)
-    for i in range(len(time)):
-        if i==0:
-            begin=0
-            end=int((1-(start-int(start)))*fps)
-        elif i==len(time)-1:
-            begin=end
-            end=(signal.shape[0])
-        else:
-            begin=end
-            end=begin+fps
-        input_signal=signal[begin:end]
-        target_length=int(time[i]*fps/30)
-        print('begin=',begin,'end=',end,'target_length=',target_length,'input_signal=',input_signal.shape)
-        n_signal=np.interp(
-        np.linspace(
-            1, input_signal.shape[0], target_length), np.linspace(
-            1, input_signal.shape[0], input_signal.shape[0]), input_signal)
-        #print(n_signal[0:5],n_signal[n_signal.shape[0]-5:n_signal.shape[0]])
-        if i==0:
-            normalize_signal=n_signal
-        else:
-            normalize_signal=np.concatenate((normalize_signal,n_signal))
-    return normalize_signal
+    counter=0
+    delete_img=[]
+    normalize_signal=None
+    resample_len=[]
+    save_time=[]
+    img_len=[]
+    for i in range(len(img_time)):
+        t_img_time=img_time[i]
+        have_signal=False
+        #find the signal that have the same time with img
+        for j in range(len(signal_time)):
+            if(signal_time[j]==t_img_time):
+                have_signal=True
+                break
+        if(have_signal):
 
+            target_length=int(img_counter[i]*fps/30)
+
+            resample_len.append(target_length)
+            save_time.append(float(t_img_time)/10)
+            img_len.append(img_counter[i])
+            #find original signal interval
+            c_signal_range=signal_range[j]
+            begin=c_signal_range[0]
+            end=c_signal_range[1]
+
+            input_signal=signal[begin:end]
+            n_signal=np.interp(
+            np.linspace(
+                1, input_signal.shape[0], target_length), np.linspace(
+                1, input_signal.shape[0], input_signal.shape[0]), input_signal)
+            print('begin=',begin,'end=',end,'target_length=',target_length,'input_signal=',input_signal.shape)
+            #合併resample的訊號
+            if counter==0:
+                normalize_signal=n_signal
+            else:
+                normalize_signal=np.concatenate((normalize_signal,n_signal))
+            counter+=img_counter[i]
+        else: #相片對應不到訊號
+            start_del=counter+1
+            counter+=img_counter[i]
+            for i in range(start_del,counter+1):
+                delete_img.append(i)
+            #print('delet time =',t_img_time)
+    #print(delete_img)
+    return normalize_signal,delete_img,resample_len,save_time,img_len
 def normalize(file_dir):
     global save_time_complete
     while(not save_time_complete):
@@ -759,63 +851,121 @@ def normalize(file_dir):
     ecg_path=f'{file_dir}/ECG.csv'
     img_path=f'{file_dir}/img/*.png'
     record_info=f'{file_dir}/img/time_step.txt'
+    ppg_time_step=f'{file_dir}/ECG_PPG_time_step.txt'
     img=glob.glob(img_path)
 
-    #print('img_length',len(img))
-    #print('ideal ecg length',int(len(img)/30*1000))
-    #print('ideal ppg length',int(len(img)/30*100))
+    #read ppg ecg timestep
+    ppg_time=[] #12,13,14,15s
+    ppg_counter=[] #[9,20],[20,68] 第12秒時，對應的訊號為9-20格
+    ecg_counter=[]
+    with open(ppg_time_step) as f:
+        last=0
+        ecg_end=0
+        ppg_end=0
+        for line in f.readlines():
+            s = line.split(',') # timestep,ECG此次封包的點數,ppg此次封包的點數
+            time=int(float(s[0])*10)
+            if last==time:
+                ecg_end+=int(s[1])
+                ppg_end+=int(s[2])
+            else:
+                if(last!=0):
+                    ppg_counter.append([ppg_start,ppg_end])
+                    ecg_counter.append([ecg_start,ecg_end])
+                ecg_start=ecg_end
+                ppg_start=ppg_end
+                ecg_end+= int(s[1])
+                ppg_end+=int(s[2])
+                last=time
+                ppg_time.append(time)
+        ppg_counter.append([ppg_start,ppg_end])
+        ecg_counter.append([ecg_start,ecg_end])      
+                
     
     #get time info
-    time=list()
+    img_time=list()
+    img_counter=list()
     last=None
-    start=None
-    stop=None
+    img_time_step=list()
     with open(record_info, "r") as f:
         str1 = f.read()
         str1 = str1.split("\n")
         record_time=str1[0]
-        time_step= open(os.path.join(normalize_dir, 'time_step.txt'), "w")
         counter=1
         time_counter=0
         for x in str1[1].split():
             if(counter==1):
                 x=x[1:-1] #去[,
                 temp_x=x
-                start=float(temp_x)
-                last=int(float(temp_x))
+                last=int(float(temp_x)*10)
+                img_time.append(last)
                 time_counter=0
             elif(counter==len(str1[1].split())):
                 x=x[:-1] #去]
                 temp_x=x
-                stop=float(temp_x)
             else:
                 x=x[:-1] #去,
                 
             #print('int=',last,'x=',x)
-            time_step.write(f'{x}\n')
+            img_time_step.append(x)
             
-            if(last==int(float(x))):
+            if(last==int(float(x)*10)):
                 time_counter+=1
-                if(counter==len(str1[1].split())): #最後一筆資料
-                    time.append(time_counter)
+                    
             else:
-                time.append(time_counter)
+                img_counter.append(time_counter)
                 time_counter=1
-                last=int(float(x))
+                last=int(float(x)*10)
+                img_time.append(last)
             counter+=1
+        img_counter.append(time_counter)
     
-    duration=stop-start
     
-    #resample to time sequence
-    ecg_len,re_ecg=resample(ecg_path, int(duration*1000))
-    ppgr_len,re_ppgr=resample(ppgr_path, int(duration*100))
-    ppgir_len,re_ppgir=resample(ppgir_path, int(duration*100))
-
+    #read wave
+    ecg_len,ecg=read_wave(ecg_path)
+    ppgr_len,ppgr=read_wave(ppgr_path)
+    ppgir_len,ppgir=read_wave(ppgir_path)
     # normalize
-    re_ecg=clip_normalize(re_ecg,1000,time,start)
-    re_ppgr=clip_normalize(re_ppgr,100,time,start)
-    re_ppgir=clip_normalize(re_ppgir,100,time,start)
+    re_ecg,delete_img,resample_len_ecg,save_time,img_len=clip_normalize(ecg,1000,ppg_time,ecg_counter,img_counter,img_time)
+    re_ppgr,delete_img,resample_len_ppgr,save_time,img_len=clip_normalize(ppgr,100,ppg_time,ppg_counter,img_counter,img_time)
+    re_ppgir,delete_img,resample_len_ppgir,save_time,img_len=clip_normalize(ppgir,100,ppg_time,ppg_counter,img_counter,img_time)
+    
+    #delete img that can't get signal
+    for i in delete_img:
+        counter=f'{i:05d}.png'
+        img_name=f'{file_dir}/img/{counter}'
+        print(img_name)
+        if os.path.isfile(img_name):
+            os.remove(img_name)
+    
+    
+    #rename img that can be transformed to video
+    path=f'{file_dir}/img'
+    img_list=os.listdir(path)
+    img_list.remove('time_step.txt')
+    img_list.sort(key=lambda x :int(x[:-4]))
+    n = 1          # 設定名稱從 1 開始
+    for i in img_list:
+        name=os.path.join(path,f'{n:05d}.png')
+        #print(i,'=>',name)
+        os.rename(os.path.join(path,i), name)   # 改名時，使用字串格式化的方式進行三位數補零
+        n = n + 1    # 每次重複時將 n 增加 1
 
+    time_step= open(os.path.join(normalize_dir, 'time_step.txt'), "w")
+    for i in range(len(img_len)):
+        time_step.write(f'{save_time[i]} {resample_len_ecg[i]} {resample_len_ppgir[i]} {resample_len_ppgr[i]} {img_len[i]}\n')
+    #save new timestep 
+    #print('resample_len=',len(resample_len_ppgr))
+    #print('img_time_step')
+    #counter=0
+    #for i in range(len(img_time_step)):
+    #    if i+1 in delete_img:
+    #        print(i+1)
+    #    else:
+    #        time_step.write(f'{img_time_step[i]} {resample_len_ecg[counter]} {resample_len_ppgr[counter]} {resample_len_ppgir[counter]}\n')
+    #        counter+=1
+    #print('counter=',counter)
+    
     df = pd.DataFrame(re_ppgr)
     df.to_csv(os.path.join(normalize_dir, 'PPG_R.csv'), index=False)
     df = pd.DataFrame(re_ppgir)
@@ -833,7 +983,7 @@ def normalize(file_dir):
     information.write(f'original ECG length    = {ecg_len} normalize length = {re_ecg.shape[0]}\n')
     information.write(f'original PPG_R length  =  {ppgr_len} normalize length = {re_ppgr.shape[0]}\n')
     information.write(f'original PPG_IR length =  {ppgir_len} normalize length = {re_ppgir.shape[0]}\n')
-    information.write(f'original image length  =  {len(img)} normalize length = {len(img)}\n')
+    information.write(f'original image length  =  {len(img)} normalize length = {len(img_list)}\n')
     
     information.close()
 
@@ -1011,7 +1161,29 @@ if __name__ == "__main__":
     Log_text['text'] = f'> Click on the [Scan] button to connect to TriAnswer Device...'
     Log_text.pack(fill='x')
     frm_log.grid(row=1, column=0, columnspan=2, padx=5, pady=5, sticky='nsew')
+    '''
+    # 创建曝光调整框架
+    exposure_frame = ttk.LabelFrame(master=window, text="camera 調整")
+    exposure_frame.grid(row=2, column=1, columnspan=1,padx=10, pady=5, sticky=tk.W+tk.E)
 
+    exposure_entry = ttk.Entry(exposure_frame)
+    exposure_entry.grid(row=0, column=0, padx=10, pady=5)
+
+    exposure_value_label = ttk.Label(exposure_frame, text="曝光值: ")
+    exposure_value_label.grid(row=1, column=0, padx=10, pady=5)
+
+    # 创建增益调整框架
+    #gain_frame = ttk.LabelFrame(master=window, text="增益調整")
+    #gain_frame.grid(row=2, column=1, columnspan=1,padx=10, pady=5, sticky=tk.W+tk.E)
+
+    gain_entry = ttk.Entry(exposure_frame)
+    gain_entry.grid(row=0, column=1, padx=10, pady=5)
+
+    gain_value_label = ttk.Label(exposure_frame, text="增益值: ")
+    gain_value_label.grid(row=1, column=1, padx=10, pady=5)
+    apply_button = ttk.Button(window, text="應用",command=apply_settings) #command=self.apply_settings
+    apply_button.grid(row=3, column=1, columnspan=1, padx=10, pady=5, sticky=tk.W+tk.E)
+    '''
     # Asyncio
     async_loop = asyncio.get_event_loop()
     queue = asyncio.Queue()
