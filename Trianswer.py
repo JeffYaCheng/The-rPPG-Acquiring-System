@@ -500,7 +500,6 @@ class ipcamCapture:
         #self.capture.set(cv2.CAP_PROP_WB_TEMPERATURE, wb)
         #self.capture.set(cv2.CAP_PROP_FOCUS, fc)
         #self.capture.set(cv2.CAP_PROP_BRIGHTNESS,100)  #控制亮度
-        '''
         exposure_entry.insert(0, str(int(exposure)))
         gain_entry.insert(0, str(int(gain)))
         if not exp_success:
@@ -513,7 +512,6 @@ class ipcamCapture:
              p_gain=gain
         exposure_value_label.config(text="曝光值: {}".format(p_exp))
         gain_value_label.config(text="增益值: {}".format(p_gain))
-        '''
         if not self.capture.isOpened():
             print("Cannot open camera")
             exit()
@@ -798,6 +796,7 @@ def clip_normalize(signal,fps,signal_time,signal_range,img_counter,img_time):
     resample_len=[]
     save_time=[]
     img_len=[]
+    first=True
     for i in range(len(img_time)):
         t_img_time=img_time[i]
         have_signal=False
@@ -825,8 +824,9 @@ def clip_normalize(signal,fps,signal_time,signal_range,img_counter,img_time):
                 1, input_signal.shape[0], input_signal.shape[0]), input_signal)
             print('begin=',begin,'end=',end,'target_length=',target_length,'input_signal=',input_signal.shape)
             #合併resample的訊號
-            if counter==0:
+            if first:
                 normalize_signal=n_signal
+                first=False
             else:
                 normalize_signal=np.concatenate((normalize_signal,n_signal))
             counter+=img_counter[i]
@@ -1161,7 +1161,7 @@ if __name__ == "__main__":
     Log_text['text'] = f'> Click on the [Scan] button to connect to TriAnswer Device...'
     Log_text.pack(fill='x')
     frm_log.grid(row=1, column=0, columnspan=2, padx=5, pady=5, sticky='nsew')
-    '''
+    
     # 创建曝光调整框架
     exposure_frame = ttk.LabelFrame(master=window, text="camera 調整")
     exposure_frame.grid(row=2, column=1, columnspan=1,padx=10, pady=5, sticky=tk.W+tk.E)
@@ -1183,7 +1183,7 @@ if __name__ == "__main__":
     gain_value_label.grid(row=1, column=1, padx=10, pady=5)
     apply_button = ttk.Button(window, text="應用",command=apply_settings) #command=self.apply_settings
     apply_button.grid(row=3, column=1, columnspan=1, padx=10, pady=5, sticky=tk.W+tk.E)
-    '''
+    
     # Asyncio
     async_loop = asyncio.get_event_loop()
     queue = asyncio.Queue()
