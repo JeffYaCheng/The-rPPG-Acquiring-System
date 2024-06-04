@@ -797,6 +797,8 @@ def clip_normalize(signal,fps,signal_time,signal_range,img_counter,img_time):
     save_time=[]
     img_len=[]
     first=True
+    mean=np.mean(signal)
+    std=np.std(signal)
     for i in range(len(img_time)):
         t_img_time=img_time[i]
         have_signal=False
@@ -818,6 +820,8 @@ def clip_normalize(signal,fps,signal_time,signal_range,img_counter,img_time):
             end=c_signal_range[1]
 
             input_signal=signal[begin:end]
+            input_signal=input_signal[input_signal<(mean+5*std)]
+            input_signal=input_signal[input_signal>(mean-5*std)]
             n_signal=np.interp(
             np.linspace(
                 1, input_signal.shape[0], target_length), np.linspace(
@@ -864,7 +868,7 @@ def normalize(file_dir):
         ppg_end=0
         for line in f.readlines():
             s = line.split(',') # timestep,ECG此次封包的點數,ppg此次封包的點數
-            time=int(float(s[0])*10)
+            time=int(float(s[0])*10) #0.1s 同步一次
             if last==time:
                 ecg_end+=int(s[1])
                 ppg_end+=int(s[2])
@@ -897,7 +901,7 @@ def normalize(file_dir):
             if(counter==1):
                 x=x[1:-1] #去[,
                 temp_x=x
-                last=int(float(temp_x)*10)
+                last=int(float(temp_x)*10) #record last time 1.0s 1.0s 1.0s => 1.1s 1.1s 1.1s
                 img_time.append(last)
                 time_counter=0
             elif(counter==len(str1[1].split())):
