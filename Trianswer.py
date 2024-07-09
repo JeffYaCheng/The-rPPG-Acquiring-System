@@ -1,4 +1,5 @@
 import os
+import shutil
 import asyncio
 import sys
 
@@ -25,6 +26,7 @@ from PIL import Image
 
 import glob
 import pandas as pd
+from scipy.signal import firwin,lfilter,filtfilt
 
 DATA_VAL_UUID = "0000a001-0000-1000-8000-00805f9b34fb"
 DEVICE_NAME_FILTER = "Tri"
@@ -59,7 +61,6 @@ imgpath=None
 # File related
 TriAnswer_PROG_ROOT = os.path.abspath(os.getcwd())
 TriAnswer_Record_Dir = os.path.join(TriAnswer_PROG_ROOT, 'TriAnswer_Records')
-Normalize_Dir = os.path.join(TriAnswer_PROG_ROOT, 'Normalize')
 TA_FileHandle = [None, None, None, None]
 CH_SpeedText = ['Fast_1KHz', 'Medium_500Hz', 'Slow_333Hz', 'Default_100Hz']
 Btn_Record_State = 0  # 0: Rec, 1:Stop
@@ -437,8 +438,12 @@ def waveform_draw_task():
             mat_ax[ch_num].clear()
 
             if ch_num < 1: #delete ch2
+                fs=1000
+                taps = firwin(70, [0.5 / (fs / 2), 55 / (fs / 2)], pass_zero=False)
+                plot_signal=filtfilt(taps, 1.0, np.double(waveform_buffer[ch_num][::CH_SpeedMode[ch_num]]))
+                #print('ECG plot shape : ',waveform_buffer[ch_num][::CH_SpeedMode[ch_num]].shape)
                 mat_ax[ch_num].plot(time_array[::CH_SpeedMode[ch_num]], #CH0
-                                    waveform_buffer[ch_num][::CH_SpeedMode[ch_num]],
+                                    plot_signal,
                                     color='r', linewidth=1, alpha=0.7)
             else:
                 # CH3
@@ -451,9 +456,13 @@ def waveform_draw_task():
                 '''
                 # CH4
                 # 紅光
+                fs=100
+                taps = firwin(7, [0.5 / (fs / 2), 10 / (fs / 2)], pass_zero=False)
+                #waveform_buffer[ch_num +2][::CH_SpeedMode[ch_num + 2]]=waveform_buffer[ch_num +2][::CH_SpeedMode[ch_num + 2]]*-1
+                plot_signal_2=filtfilt(taps, 1.0, np.double(waveform_buffer[ch_num +2][::CH_SpeedMode[ch_num + 2]]))
+                #print('ppg plot shape : ',waveform_buffer[ch_num +2][::CH_SpeedMode[ch_num + 2]].shape)
                 mat_ax[ch_num].plot(time_array[::CH_SpeedMode[ch_num + 2]], #CH3
-                                    waveform_buffer[ch_num +
-                                                    2][::CH_SpeedMode[ch_num + 2]],
+                                    plot_signal_2,
                                     color='b', linewidth=1, alpha=0.7)
             # axis setting
             mat_ax[ch_num].set_xlim(0, Signal_FRAME_LEN)
@@ -466,7 +475,7 @@ def waveform_draw_task():
         mat_ax[1].set_title('PPG')
         # update figure
         canvas.draw()
-        time.sleep(0.5)
+        time.sleep(1)
 
     # if FLOW_CTRL_STATE == 2:  # when connected
     #    window.after(waveform_draw_period, waveform_draw_task)
@@ -705,9 +714,6 @@ def createRecordFile():
     dirIsExist = os.path.exists(TriAnswer_Record_Dir)
     if not dirIsExist:
         os.makedirs(TriAnswer_Record_Dir)
-    dirIsExist = os.path.exists(Normalize_Dir)
-    if not dirIsExist:
-        os.makedirs(Normalize_Dir)
     # Disable the setting frame
     """
     chk_CH1.configure(state='disable')
@@ -777,223 +783,23 @@ def closeRecordFile(file_dir:str):
             for childView in frm_Ch[ch_ind].winfo_children():
                 childView.configure(state='normal')
     """
-def read_wave(path:str):
-    """Samples a PPG sequence into specific length."""
-    signal=pd.read_csv(path)
-    signal=signal.values.reshape(1,-1)
-    signal=signal.tolist()
-    signal=signal[0]
-    for j in range(len(signal)):
-        signal[j]=int(signal[j])
-    input_signal=np.asarray(signal)
-    return len(signal),input_signal
 
-def clip_normalize(signal,fps,signal_time,signal_range,img_counter,img_time):
-    print('ori signal=',signal.shape)
-    counter=0
-    delete_img=[]
-    normalize_signal=None
-    resample_len=[]
-    save_time=[]
-    img_len=[]
-    first=True
-    mean=np.mean(signal)
-    std=np.std(signal)
-    for i in range(len(img_time)):
-        t_img_time=img_time[i]
-        have_signal=False
-        #find the signal that have the same time with img
-        for j in range(len(signal_time)):
-            if(signal_time[j]==t_img_time):
-                have_signal=True
-                break
-        if(have_signal):
-
-            target_length=int(img_counter[i]*fps/30)
-
-            resample_len.append(target_length)
-            save_time.append(float(t_img_time)/10)
-            img_len.append(img_counter[i])
-            #find original signal interval
-            c_signal_range=signal_range[j]
-            begin=c_signal_range[0]
-            end=c_signal_range[1]
-
-            input_signal=signal[begin:end]
-            input_signal=input_signal[input_signal<(mean+5*std)]
-            input_signal=input_signal[input_signal>(mean-5*std)]
-            n_signal=np.interp(
-            np.linspace(
-                1, input_signal.shape[0], target_length), np.linspace(
-                1, input_signal.shape[0], input_signal.shape[0]), input_signal)
-            print('begin=',begin,'end=',end,'target_length=',target_length,'input_signal=',input_signal.shape)
-            #合併resample的訊號
-            if first:
-                normalize_signal=n_signal
-                first=False
-            else:
-                normalize_signal=np.concatenate((normalize_signal,n_signal))
-            counter+=img_counter[i]
-        else: #相片對應不到訊號
-            start_del=counter+1
-            counter+=img_counter[i]
-            for i in range(start_del,counter+1):
-                delete_img.append(i)
-            #print('delet time =',t_img_time)
-    #print(delete_img)
-    return normalize_signal,delete_img,resample_len,save_time,img_len
 def normalize(file_dir):
     global save_time_complete
     while(not save_time_complete):
         print('wait save time and to normalize')
-    normalize_dir=os.path.join(Normalize_Dir, os.path.basename(file_dir))
-    os.makedirs(normalize_dir)
 
-    ppgr_path=f'{file_dir}/PPG_R.csv'
-    #print(ppgr_path)
-    ppgir_path=f'{file_dir}/PPG_IR.csv'
     ecg_path=f'{file_dir}/ECG.csv'
     img_path=f'{file_dir}/img/*.png'
-    record_info=f'{file_dir}/img/time_step.txt'
-    ppg_time_step=f'{file_dir}/ECG_PPG_time_step.txt'
     img=glob.glob(img_path)
-
-    #read ppg ecg timestep
-    ppg_time=[] #12,13,14,15s
-    ppg_counter=[] #[9,20],[20,68] 第12秒時，對應的訊號為9-20格
-    ecg_counter=[]
-    with open(ppg_time_step) as f:
-        last=0
-        ecg_end=0
-        ppg_end=0
-        for line in f.readlines():
-            s = line.split(',') # timestep,ECG此次封包的點數,ppg此次封包的點數
-            time=int(float(s[0])*10) #0.1s 同步一次
-            if last==time:
-                ecg_end+=int(s[1])
-                ppg_end+=int(s[2])
-            else:
-                if(last!=0):
-                    ppg_counter.append([ppg_start,ppg_end])
-                    ecg_counter.append([ecg_start,ecg_end])
-                ecg_start=ecg_end
-                ppg_start=ppg_end
-                ecg_end+= int(s[1])
-                ppg_end+=int(s[2])
-                last=time
-                ppg_time.append(time)
-        ppg_counter.append([ppg_start,ppg_end])
-        ecg_counter.append([ecg_start,ecg_end])      
-                
-    
-    #get time info
-    img_time=list()
-    img_counter=list()
-    last=None
-    img_time_step=list()
-    with open(record_info, "r") as f:
-        str1 = f.read()
-        str1 = str1.split("\n")
-        record_time=str1[0]
-        counter=1
-        time_counter=0
-        for x in str1[1].split():
-            if(counter==1):
-                x=x[1:-1] #去[,
-                temp_x=x
-                last=int(float(temp_x)*10) #record last time 1.0s 1.0s 1.0s => 1.1s 1.1s 1.1s
-                img_time.append(last)
-                time_counter=0
-            elif(counter==len(str1[1].split())):
-                x=x[:-1] #去]
-                temp_x=x
-            else:
-                x=x[:-1] #去,
-                
-            #print('int=',last,'x=',x)
-            img_time_step.append(x)
-            
-            if(last==int(float(x)*10)):
-                time_counter+=1
-                    
-            else:
-                img_counter.append(time_counter)
-                time_counter=1
-                last=int(float(x)*10)
-                img_time.append(last)
-            counter+=1
-        img_counter.append(time_counter)
-    
-    
-    #read wave
-    ecg_len,ecg=read_wave(ecg_path)
-    ppgr_len,ppgr=read_wave(ppgr_path)
-    ppgir_len,ppgir=read_wave(ppgir_path)
-    # normalize
-    re_ecg,delete_img,resample_len_ecg,save_time,img_len=clip_normalize(ecg,1000,ppg_time,ecg_counter,img_counter,img_time)
-    re_ppgr,delete_img,resample_len_ppgr,save_time,img_len=clip_normalize(ppgr,100,ppg_time,ppg_counter,img_counter,img_time)
-    re_ppgir,delete_img,resample_len_ppgir,save_time,img_len=clip_normalize(ppgir,100,ppg_time,ppg_counter,img_counter,img_time)
-    
-    #delete img that can't get signal
-    for i in delete_img:
-        counter=f'{i:05d}.png'
-        img_name=f'{file_dir}/img/{counter}'
-        print(img_name)
-        if os.path.isfile(img_name):
-            os.remove(img_name)
-    
-    
-    #rename img that can be transformed to video
-    path=f'{file_dir}/img'
-    img_list=os.listdir(path)
-    img_list.remove('time_step.txt')
-    img_list.sort(key=lambda x :int(x[:-4]))
-    n = 1          # 設定名稱從 1 開始
-    for i in img_list:
-        name=os.path.join(path,f'{n:05d}.png')
-        #print(i,'=>',name)
-        os.rename(os.path.join(path,i), name)   # 改名時，使用字串格式化的方式進行三位數補零
-        n = n + 1    # 每次重複時將 n 增加 1
-
-    time_step= open(os.path.join(normalize_dir, 'time_step.txt'), "w")
-    for i in range(len(img_len)):
-        time_step.write(f'{save_time[i]} {resample_len_ecg[i]} {resample_len_ppgir[i]} {resample_len_ppgr[i]} {img_len[i]}\n')
-    #save new timestep 
-    #print('resample_len=',len(resample_len_ppgr))
-    #print('img_time_step')
-    #counter=0
-    #for i in range(len(img_time_step)):
-    #    if i+1 in delete_img:
-    #        print(i+1)
-    #    else:
-    #        time_step.write(f'{img_time_step[i]} {resample_len_ecg[counter]} {resample_len_ppgr[counter]} {resample_len_ppgir[counter]}\n')
-    #        counter+=1
-    #print('counter=',counter)
-    
-    df = pd.DataFrame(re_ppgr)
-    df.to_csv(os.path.join(normalize_dir, 'PPG_R.csv'), index=False)
-    df = pd.DataFrame(re_ppgir)
-    df.to_csv(os.path.join(normalize_dir, 'PPG_IR.csv'), index=False)
-    df = pd.DataFrame(re_ecg)
-    df.to_csv(os.path.join(normalize_dir, 'ECG.csv'), index=False)
-    
-
-    FileName = f'normalize_information.txt'
-    information= open(os.path.join(normalize_dir, FileName), "w")
-    information.write(f'ori name ={os.path.basename(file_dir)}\n')
-    information.write(f'actually record time = {record_time}\n')
-    information.write(f'calculate record video time  =  {len(img)/30}\n')
-    information.write(f'calculate record ECG time  =  {ecg_len/1000}\n')
-    information.write(f'original ECG length    = {ecg_len} normalize length = {re_ecg.shape[0]}\n')
-    information.write(f'original PPG_R length  =  {ppgr_len} normalize length = {re_ppgr.shape[0]}\n')
-    information.write(f'original PPG_IR length =  {ppgir_len} normalize length = {re_ppgir.shape[0]}\n')
-    information.write(f'original image length  =  {len(img)} normalize length = {len(img_list)}\n')
-    
-    information.close()
-
-    cmd=f'ffmpeg -r 30 -i {file_dir}/img/%05d.png -an -c:v rawvideo -pix_fmt bgr24 {normalize_dir}/output.avi'
-    res=os.popen(cmd)
-    print('Normalize complete')
+    signal=pd.read_csv(ecg_path)
+    signal=signal.values.reshape(1,-1).squeeze()
+    print(signal.shape)
+    signal=signal.tolist()
+    print(len(signal))
+    print(f'calculate record video time  =  {len(img)//30}')
+    print(f'calculate record video time  =  {len(signal)//1000}')
+    print('Please Check the duration ')
 """
 def CH_SPEED_EN(ch_num):
     if CH_EN[ch_num].get():
