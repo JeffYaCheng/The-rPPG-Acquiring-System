@@ -167,12 +167,8 @@ def clip_normalize(signal,fps,signal_time,signal_range,img_counter,img_time,type
             counter_procss_n_img+=img_counter[i]
             for i in range(start_del,counter_procss_n_img+1):
                 delete_img.append(i)
-            #print('delet time =',t_img_time)
-    #print(delete_img)
-    #print('total image',total_img)
     return normalize_signal,delete_img,resample_len,save_time,img_len
 def normalize(root,file_dir):
-    #print(file_dir)
     
     normalize_dir=os.path.join(root, os.path.basename(file_dir))
     if not os.path.exists(normalize_dir):
@@ -182,7 +178,6 @@ def normalize(root,file_dir):
         return 
 
     ppgr_path=f'{file_dir}/PPG_R.csv'
-    #print(ppgr_path)
     ppgir_path=f'{file_dir}/PPG_IR.csv'
     ecg_path=f'{file_dir}/ECG.csv'
     img_path=f'{file_dir}/img/*.png'
@@ -193,8 +188,8 @@ def normalize(root,file_dir):
     # copy img
     source_folder = os.path.join(file_dir, 'img')
     destination_folder = os.path.join(normalize_dir, 'img')
-    print('destination_folder=',destination_folder)
-    print('source_folder=',source_folder)
+    #print('destination_folder=',destination_folder)
+    #print('source_folder=',source_folder)
     if not os.path.exists(destination_folder):
         os.makedirs(destination_folder)
         # fetch all files
@@ -202,7 +197,6 @@ def normalize(root,file_dir):
             # construct full file path
             source = os.path.join(source_folder, file_name)
             destination = os.path.join(destination_folder, file_name)
-            #print('source=',source)
             # copy only files
             if os.path.isfile(source):
                 shutil.copy(source, destination)
@@ -300,15 +294,10 @@ def normalize(root,file_dir):
     ppgir_len,ppgir=read_wave(ppgir_path,Filter=True,type='PPG')
     # normalize
     re_ecg,delete_img,resample_len_ecg,save_time,img_len=clip_normalize(ecg,1000,ppg_time,ecg_counter,img_counter,img_time,'ECG')
-    #print(delete_img)
     re_ppgr,delete_img,resample_len_ppgr,save_time,img_len=clip_normalize(ppgr,100,ppg_time,ppg_counter,img_counter,img_time,'rPPG')
-    #print(delete_img)
     re_ppgir,delete_img,resample_len_ppgir,save_time,img_len=clip_normalize(ppgir,100,ppg_time,ppg_counter,img_counter,img_time,'rPPG')
     
-    #path=f'{file_dir}/img'
-    #img_list=os.listdir(path)
-    #img_list.remove('time_step.txt')
-    #img_num=len(img_list)
+
     #delete img that can't get signal
     for i in delete_img:
         counter=f'{i:05d}.png'
@@ -319,11 +308,9 @@ def normalize(root,file_dir):
         if os.path.isfile(img_name):
             print(img_name)
             os.remove(img_name)
-        #print('==========================================delete img =============================================')
         
     
     #rename img that can be transformed to video
-
     path=f'{normalize_dir}/img'
     img_list=os.listdir(path)
     img_list.remove('time_step.txt')
@@ -331,25 +318,13 @@ def normalize(root,file_dir):
     n = 1          # 設定名稱從 1 開始
     for i in img_list:
         name=os.path.join(path,f'{n:05d}.png')
-        #print(i,'=>',name)
         os.rename(os.path.join(path,i), name)   # 改名時，使用字串格式化的方式進行三位數補零
         n = n + 1    # 每次重複時將 n 增加 1
     
     time_step= open(os.path.join(normalize_dir, 'syn_time_step.txt'), "w")
     for i in range(len(img_len)):
         time_step.write(f'{save_time[i]} {resample_len_ecg[i]} {resample_len_ppgir[i]} {resample_len_ppgr[i]} {img_len[i]}\n')
-    #save new timestep 
-    #print('resample_len=',len(resample_len_ppgr))
-    #print('img_time_step')
-    #counter=0
-    #for i in range(len(img_time_step)):
-    #    if i+1 in delete_img:
-    #        print(i+1)
-    #    else:
-    #        time_step.write(f'{img_time_step[i]} {resample_len_ecg[counter]} {resample_len_ppgr[counter]} {resample_len_ppgir[counter]}\n')
-    #        counter+=1
-    #print('counter=',counter)
-    
+
     df = pd.DataFrame(re_ppgr)
     df.to_csv(os.path.join(normalize_dir, 'syn_PPG_R.csv'), index=False)
     df = pd.DataFrame(re_ppgir)
@@ -367,7 +342,6 @@ def normalize(root,file_dir):
     information.write(f'original ECG length    = {ecg_len} normalize length = {re_ecg.shape[0]}\n')
     information.write(f'original PPG_R length  =  {ppgr_len} normalize length = {re_ppgr.shape[0]}\n')
     information.write(f'original PPG_IR length =  {ppgir_len} normalize length = {re_ppgir.shape[0]}\n')
-    #information.write(f'original image length  =  {len(img)} normalize length = {img_num}\n')
     information.write(f'original image length  =  {len(img)} normalize length = {len(img_list)}\n')
     
     information.close()
@@ -387,11 +361,11 @@ if not dirIsExist:
     os.makedirs(Normalize_Dir)
 
 parser.add_argument('-i','--input_file_path',type=str,default=TriAnswer_Record_Dir)
-parser.add_argument('-s','--save_file_path',type=str,default=Normalize_Dir)
+parser.add_argument('-o','--output_file_path',type=str,default=Normalize_Dir)
 args=parser.parse_args()
 
 file_path=args.input_file_path
-save_path=args.save_file_path
+save_path=args.output_file_path
 data_dir=os.listdir(file_path)
 for i in range(len(data_dir)):
     print(os.path.join(file_path, data_dir[i]),'  =>  ',save_path,data_dir[i])

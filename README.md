@@ -12,6 +12,7 @@ The rPPG acquiring system.
         - Scan：Search Trianswer
         - Choose your Trianswer id
         - Connect to device
+        - Adjust Light
         - Start REC
             - Files will save in the `./TriAnswer_Records` directory
         - Stop REC
@@ -19,7 +20,7 @@ The rPPG acquiring system.
      - Run command: `python synchronize.py`
         - Files will be saved in the `./Normalize` directory
     - If you want to choose the input and output data files, you can run:
-        - `python synchronize.py -i input_file_path -s save_file_path`
+        - `python synchronize.py -i input_file_path -o output_file_path`
         - Default `input_file_path`: `./TriAnswer_Records`
         - Default `save_file_path`: `./Normalize`
 

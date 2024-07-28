@@ -27,6 +27,8 @@ from PIL import Image
 import glob
 import pandas as pd
 from scipy.signal import firwin,lfilter,filtfilt
+from math import ceil
+import pandas as pd
 
 DATA_VAL_UUID = "0000a001-0000-1000-8000-00805f9b34fb"
 DEVICE_NAME_FILTER = "Tri"
@@ -54,9 +56,9 @@ camera = None
 video = None
 image_width = int(640)
 image_height = int(480)
-camera_num = int(0)
-exposure=int(-3)
-gain=int(64)
+camera_num = int(1)
+exposure=int(-5)
+gain=int(1)
 imgpath=None
 # File related
 TriAnswer_PROG_ROOT = os.path.abspath(os.getcwd())
@@ -459,7 +461,7 @@ def waveform_draw_task():
                 fs=100
                 taps = firwin(7, [0.5 / (fs / 2), 10 / (fs / 2)], pass_zero=False)
                 #waveform_buffer[ch_num +2][::CH_SpeedMode[ch_num + 2]]=waveform_buffer[ch_num +2][::CH_SpeedMode[ch_num + 2]]*-1
-                plot_signal_2=filtfilt(taps, 1.0, np.double(waveform_buffer[ch_num +2][::CH_SpeedMode[ch_num + 2]]))
+                plot_signal_2=filtfilt(taps, 1.0, np.double(waveform_buffer[ch_num +2][::CH_SpeedMode[ch_num + 2]]))*-1
                 #print('ppg plot shape : ',waveform_buffer[ch_num +2][::CH_SpeedMode[ch_num + 2]].shape)
                 mat_ax[ch_num].plot(time_array[::CH_SpeedMode[ch_num + 2]], #CH3
                                     plot_signal_2,
@@ -496,21 +498,25 @@ class ipcamCapture:
         
         #先讀一張，改值才有效
         self.status, self.Frame = self.capture.read()
+        self.capture.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0)
+        self.exp=exposure
+        self.gain=gain
+        exp_success=self.capture.set(cv2.CAP_PROP_EXPOSURE,self.exp)
+        gain_success=self.capture.set(cv2.CAP_PROP_GAIN, self.gain)
+        exposure_entry.insert(0, str(''))
+        gain_entry.insert(0, str(''))
+        exposure_entry.insert(0, str(self.exp))
+        gain_entry.insert(0, str(self.gain))
         # 關掉相機自動的功能
         #exp = self.capture.get(cv2.CAP_PROP_EXPOSURE)
         #wb = self.capture.get(cv2.CAP_PROP_WB_TEMPERATURE)
         #fc = self.capture.get(cv2.CAP_PROP_FOCUS)
         #self.capture.set(cv2.CAP_PROP_AUTO_WB, 0)  # 關掉自動白平衡 0
-        self.capture.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0)
         #self.capture.set(cv2.CAP_PROP_AUTOFOCUS, 0)
-        exp_success=self.capture.set(cv2.CAP_PROP_EXPOSURE, exposure)
-        gain_success=self.capture.set(cv2.CAP_PROP_GAIN, gain)
         #self.capture.set(cv2.CAP_PROP_EXPOSURE, -4)
         #self.capture.set(cv2.CAP_PROP_WB_TEMPERATURE, wb)
         #self.capture.set(cv2.CAP_PROP_FOCUS, fc)
         #self.capture.set(cv2.CAP_PROP_BRIGHTNESS,100)  #控制亮度
-        exposure_entry.insert(0, str(int(exposure)))
-        gain_entry.insert(0, str(int(gain)))
         if not exp_success:
             p_exp=False
         else:
@@ -531,16 +537,28 @@ class ipcamCapture:
     def set_parameter(self):
         #global exposure_entry,gain_entry,exposure_value_label,gain_value_label
         
-        exp=int(exposure_entry.get())
-        gain=int(gain_entry.get())
-        exp_success=self.capture.set(cv2.CAP_PROP_EXPOSURE, exp)
-        gain_success=self.capture.set(cv2.CAP_PROP_GAIN, gain)
+        self.exp=int(exposure_entry.get())
+        self.gain=int(gain_entry.get())
+        exp_success=self.capture.set(cv2.CAP_PROP_EXPOSURE, self.exp)
+        gain_success=self.capture.set(cv2.CAP_PROP_GAIN, self.gain)
         if not exp_success:
-            exp=False
+            self.exp=False
         if not gain_success:
-            gain=False
-        exposure_value_label.config(text="曝光值: {}".format(exp))
-        gain_value_label.config(text="增益值: {}".format(gain))
+            self.gain=False
+        exposure_value_label.config(text="曝光值: {}".format(self.exp))
+        gain_value_label.config(text="增益值: {}".format(self.gain))
+    def in_set_parameter(self,exp,gain):
+        #global exposure_entry,gain_entry,exposure_value_label,gain_value_label
+        self.exp=exp
+        self.gain=gain
+        exp_success=self.capture.set(cv2.CAP_PROP_EXPOSURE, self.exp)
+        gain_success=self.capture.set(cv2.CAP_PROP_GAIN, self.gain)
+        if not exp_success:
+            self.exp=False
+        if not gain_success:
+            self.gain=False
+        exposure_value_label.config(text="曝光值: {}".format(self.exp))
+        gain_value_label.config(text="增益值: {}".format(self.gain))
     
     def start(self):
         # 把程式放進子執行緒，daemon=True 表示該執行緒會隨著主執行緒關閉而關閉。
@@ -604,11 +622,71 @@ class ipcamCapture:
                     print('actual record time',out_time-start_recording)
                     save_time_complete=True
                 #record=0
+    def automatic_adjust_light(self):
+        complete=False
+        counter=0
+        while(not complete):
+            counter+=1
+            adjust_frame=[]
+            while(len(adjust_frame)<60):
+                frame = self.getframe()
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                adjust_frame.append(frame)
+                time.sleep(0.01)
+            frames=np.asarray(adjust_frame)
+            new,save_img,no_face=crop_face_resize(frames=frames, use_dynamic_detection=True,detection_freq=2, use_median_box=True, width=72, height=72)
+            if(no_face):
+                adjust_button.config(text=f'{counter} no_face')
+                adjust_button.update()
+            else:
+                standardized,mean,std,L=standardized_data(new)
+                if(155<=mean and mean<=185):
+                    complete=True
+                    exposure_value_label.config(text="曝光值: {}".format(self.exp))
+                    gain_value_label.config(text="增益值: {}".format(self.gain))
+                    mean_value_label.config(text="mean: {}".format(mean))
+                    adjust_button.config(text=f"adjust")
+                    adjust_button.update()
+                    gain_value_label.update()
+                    mean_value_label.update()
+                    exposure_value_label.update()
+                elif(155>mean): #加光
+                    diff=int(175-mean)
+                    exp=diff//60
+                    if(exp>0):
+                        self.in_set_parameter(self.exp+exp,self.gain)
+                    else:
+                        self.in_set_parameter(self.exp,self.gain+diff)
+                    adjust_button.config(text=f"{counter},adjust exp={self.exp},gain={self.gain},ori mean={mean}")
+                    adjust_button.update()
+                    print(f"{counter},adjust exp={self.exp},gain={self.gain},ori mean={mean}")
+                else:#減光
+                    diff=int(mean-175)
+                    exp=diff//60
+                    if(exp>0):
+                        self.in_set_parameter(self.exp-exp,self.gain)
+                    else:
+                        new_gain=self.gain-diff
+                        if(new_gain<0):
+                            self.in_set_parameter(self.exp-1,64)
+                        else:
+                            self.in_set_parameter(self.exp,new_gain)
+                    adjust_button.config(text=f"{counter},adjust exp={self.exp},gain={self.gain},ori mean={mean}")
+                    adjust_button.update()
+                    print(f"{counter},adjust exp={self.exp},gain={self.gain},ori mean={mean}")
+            time.sleep(1)
+            if(counter>10):
+                complete=True
+        
 #use to set camera parameter
 def apply_settings():
     global ipcam
     if ipcam !=None:
         ipcam.set_parameter()
+def adjust_light():
+    global ipcam
+    if ipcam !=None:
+        ipcam.automatic_adjust_light()
 def turn_on_camera():
     print('enter function turn_on_camera')
     global camera, video, FLAG_SENSING_EN, Btn_Record_State,ipcam
@@ -825,7 +903,98 @@ def Btn_Record_Ctrl():
     elif Btn_Record_State == 1:
         closeRecordFile(save_file_dir)
 
+        
+## adjust lighting function
 
+
+
+def detect(frame):
+    detector = cv2.CascadeClassifier(cv2.data.haarcascades +'haarcascade_frontalface_default.xml')
+    face_zone = detector.detectMultiScale(frame)
+    No_face=False
+    if len(face_zone) < 1:
+        No_face=True
+        #print("ERROR: No Face Detected")
+        face_box_coor = [0, 0, frame.shape[0], frame.shape[1]]
+    elif len(face_zone) >= 2:
+        # Find the index of the largest face zone
+        # The face zones are boxes, so the width and height are the same
+        max_width_index = np.argmax(face_zone[:, 2])  # Index of maximum width
+        face_box_coor = face_zone[max_width_index]
+        #print("Warning: More than one faces are detected. Only cropping the biggest one.")
+    else:
+        face_box_coor = face_zone[0]
+    use_larger_box=True
+    larger_box_coef=0.6
+    y_scale=0.4
+    if use_larger_box:
+        face_box_coor[0] = max(0, face_box_coor[0] - (larger_box_coef - 1.0) / 2 * face_box_coor[2])
+        face_box_coor[1] = max(0, face_box_coor[1] - (larger_box_coef - 1.0) * face_box_coor[3])
+        face_box_coor[2] = larger_box_coef * face_box_coor[2]
+        face_box_coor[3] = y_scale * face_box_coor[3]  
+    return face_box_coor,No_face
+        
+def crop_face_resize(frames, use_dynamic_detection, 
+                         detection_freq, use_median_box, width, height):
+    # Face Cropping
+    if use_dynamic_detection:
+        num_dynamic_det = ceil(frames.shape[0] / detection_freq)
+    else:
+        num_dynamic_det = 1
+    face_region_all = []
+    # Perform face detection by num_dynamic_det" times.
+    counter=0
+    for idx in range(num_dynamic_det):
+        bbx,no_face=detect(frames[detection_freq * idx])
+        face_region_all.append(bbx)
+        if(no_face):
+            counter+=1
+        #print('frame ',detection_freq * idx, ' bbx: ',face_region_all[idx])
+    cv2.destroyAllWindows()
+    face_region_all = np.asarray(face_region_all, dtype='int')
+    if use_median_box:
+        # Generate a median bounding box based on all detected face regions
+        face_region_median = np.median(face_region_all, axis=0).astype('int')
+    print('first:',face_region_all[0])
+    print('median:',face_region_median)
+    
+    face_region = face_region_median
+    save_img=frames[0][max(face_region[1], 0):min(face_region[1] + face_region[3], frames[0].shape[0]),
+                max(face_region[0], 0):min(face_region[0] + face_region[2], frames[0].shape[1])]
+    # Frame Resizing
+    resized_frames = np.zeros((frames.shape[0], height, width, 3))
+    for i in range(0, frames.shape[0]):
+        frame = frames[i]
+        if use_dynamic_detection:  # use the (i // detection_freq)-th facial region.
+            reference_index = i // detection_freq
+        else:  # use the first region obtrained from the first frame.
+            reference_index = 0
+        if use_median_box:
+            face_region = face_region_median
+        else:
+            face_region = face_region_all[reference_index]
+        frame = frame[max(face_region[1], 0):min(face_region[1] + face_region[3], frame.shape[0]),
+                max(face_region[0], 0):min(face_region[0] + face_region[2], frame.shape[1])]
+        resized_frames[i] = cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
+        
+    return resized_frames,save_img,counter>8 #(True no face detect)
+        
+def standardized_data(data):
+    """Z-score standardization for video data."""
+    mean=np.mean(data)
+    std=np.std(data)
+    print(f'standardized mean：{mean} std：{std}')
+    R_mean=np.mean(data[:, :, :, 0])
+    G_mean=np.mean(data[:, :, :, 1])
+    B_mean=np.mean(data[:, :, :, 2])
+    L=0.213*R_mean+0.715*G_mean+0.072*B_mean
+    print(f'Brightness = {L}')
+    data = data - mean
+    data = data / std
+    
+    data[np.isnan(data)] = 0
+    return data,mean,std,L        
+  
 if __name__ == "__main__":
 
     # Initiate TK GUI
@@ -983,16 +1152,18 @@ if __name__ == "__main__":
     exposure_value_label.grid(row=1, column=0, padx=10, pady=5)
 
     # 创建增益调整框架
-    #gain_frame = ttk.LabelFrame(master=window, text="增益調整")
-    #gain_frame.grid(row=2, column=1, columnspan=1,padx=10, pady=5, sticky=tk.W+tk.E)
-
     gain_entry = ttk.Entry(exposure_frame)
     gain_entry.grid(row=0, column=1, padx=10, pady=5)
 
     gain_value_label = ttk.Label(exposure_frame, text="增益值: ")
     gain_value_label.grid(row=1, column=1, padx=10, pady=5)
-    apply_button = ttk.Button(window, text="應用",command=apply_settings) #command=self.apply_settings
-    apply_button.grid(row=3, column=1, columnspan=1, padx=10, pady=5, sticky=tk.W+tk.E)
+    mean_value_label = ttk.Label(exposure_frame, text="mean: ")
+    mean_value_label.grid(row=1, column=2, padx=10, pady=5)
+    apply_button = ttk.Button(exposure_frame, text="應用",command=apply_settings) #command=self.apply_settings
+    apply_button.grid(row=2, column=0, columnspan=1, padx=10, pady=5, sticky=tk.W+tk.E)
+    adjust_button = ttk.Button(exposure_frame, text="adust_light",command=adjust_light) #command=self.apply_settings
+    adjust_button.grid(row=2, column=1, columnspan=1, padx=10, pady=5, sticky=tk.W+tk.E)
+    
     
     # Asyncio
     async_loop = asyncio.get_event_loop()
